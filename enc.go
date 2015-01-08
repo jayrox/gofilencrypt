@@ -10,6 +10,7 @@ import (
 	"log"
 	m "math/rand"
 	"net/http"
+	"reflect"
 	"strings"
 )
 
@@ -34,12 +35,12 @@ type FileEncDec struct {
 }
 
 func (fed *FileEncDec) Nonce() {
-	b, err := aes.NewCipher(fed.Key)
+	asec, err := aes.NewCipher(fed.Key)
 	if err != nil {
 		panic(err)
 	}
 
-	gcm, err := cipher.NewGCM(b)
+	gcm, err := cipher.NewGCM(asec)
 	if err != nil {
 		panic(err)
 	}
@@ -48,6 +49,8 @@ func (fed *FileEncDec) Nonce() {
 	if _, err := rand.Read(nonce); err != nil {
 		panic(err)
 	}
+	log.Println("nonce: ", reflect.TypeOf(nonce))
+
 	fed.nonce = nonce
 }
 
@@ -57,8 +60,8 @@ func (fed *FileEncDec) Dec() {
 
 func (fed *FileEncDec) DecB64() {
 	// Get image header
-	dec_parts := strings.Split(fed.Decoded, ";base64,")
-	header := dec_parts[0]
+	decParts := strings.Split(fed.Decoded, ";base64,")
+	header := decParts[0]
 	log.Println("header: ", header)
 
 	// Generate file name
@@ -82,7 +85,7 @@ func (fed *FileEncDec) DecB64() {
 	log.Println("file name: " + file_name)
 
 	// Decode base64
-	sDec, err := b64.StdEncoding.DecodeString(dec_parts[1])
+	sDec, err := b64.StdEncoding.DecodeString(decParts[1])
 	if err != nil {
 		log.Println(err)
 	}
@@ -116,6 +119,76 @@ func (fed *FileEncDec) Header() string {
 	return "data:image/" + fed.mime + ";base64,"
 }
 
+func (fed *FileEncDec) Load(file_path string) {
+	fed.Name = file_path
+
+	file, err := ioutil.ReadFile(fed.Name)
+	if err != nil {
+		log.Println(err)
+	}
+
+	fed.EncB64(file)
+	fed.Mime()
+	fed.Nonce()
+}
+
+func (fed *FileEncDec) EncCipher() []byte {
+	asec, err := aes.NewCipher(fed.Key)
+	if err != nil {
+		panic(err)
+	}
+
+	gcm, err := cipher.NewGCM(asec)
+	if err != nil {
+		panic(err)
+	}
+
+	plaintext := []byte(fed.Header() + fed.EncodedB64)
+	ciphertext := gcm.Seal(nil, fed.nonce, plaintext, nil)
+	return ciphertext
+}
+
+func (fed *FileEncDec) DecCipher() []byte {
+	asec, err := aes.NewCipher(fed.Key)
+	if err != nil {
+		panic(err)
+	}
+
+	gcm, err := cipher.NewGCM(asec)
+	if err != nil {
+		panic(err)
+	}
+
+	data, err := gcm.Open(nil, fed.nonce, fed.Data, nil)
+	if err != nil {
+		panic(err)
+	}
+	return data
+}
+
+func (fed *FileEncDec) WriteEnc() {
+	f := fed.EncCipher()
+
+	// write whole the body
+	enc_name := file_path + ".enc"
+	err := ioutil.WriteFile(enc_name, f, 0644)
+	if err != nil {
+		panic(err)
+	}
+}
+
+func (fed *FileEncDec) ReadEnc() {
+	// write whole the body
+	enc_name := file_path + ".enc"
+	b, err := ioutil.ReadFile(enc_name)
+	if err != nil {
+		panic(err)
+	}
+	fed.Data = data
+
+	return string(fed.DecCipher())
+}
+
 func main() {
 	http.HandleFunc("/", serveImage)
 
@@ -127,23 +200,21 @@ func serveImage(rw http.ResponseWriter, r *http.Request) {
 	path := r.URL.Path
 	log.Println(path)
 
-	filepath := "./img" + path
-	log.Println(filepath)
-	file, err := ioutil.ReadFile(filepath)
-	if err != nil {
-		log.Println(err)
-	}
+	file_path := "./img" + path
+	log.Println(file_path)
 
 	var fed FileEncDec
-	fed.Name = path
-	fed.EncB64(file)
-	fed.Mime()
+	fed.Key = []byte(randSeq(32))
+	log.Println(fed.Key)
+	fed.Load(file_path)
+
 	//log.Println(fed.EncodedB64)
 	//filename := randSeq(10)
-	f := fed.Header() + fed.EncodedB64
+	//f := fed.Header() + fed.EncodedB64
+
 	//Content-Disposition: attachment; filename=rand.ext
-	//rw.Header().Set("Content-Type", "image/"+fed.mime)
-	rw.Header().Set("Content-Type", "text/html")
+	rw.Header().Set("Content-Type", "image/"+fed.mime)
+	//rw.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(rw, f)
 	return
 }
