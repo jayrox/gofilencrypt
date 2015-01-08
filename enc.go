@@ -170,21 +170,21 @@ func (fed *FileEncDec) WriteEnc() {
 	f := fed.EncCipher()
 
 	// write whole the body
-	enc_name := file_path + ".enc"
+	enc_name := fed.Name + ".enc"
 	err := ioutil.WriteFile(enc_name, f, 0644)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (fed *FileEncDec) ReadEnc() {
+func (fed *FileEncDec) ReadEnc() string {
 	// write whole the body
-	enc_name := file_path + ".enc"
+	enc_name := fed.Name + ".enc"
 	b, err := ioutil.ReadFile(enc_name)
 	if err != nil {
 		panic(err)
 	}
-	fed.Data = data
+	fed.Data = b
 
 	return string(fed.DecCipher())
 }
@@ -210,11 +210,11 @@ func serveImage(rw http.ResponseWriter, r *http.Request) {
 
 	//log.Println(fed.EncodedB64)
 	//filename := randSeq(10)
-	//f := fed.Header() + fed.EncodedB64
+	f := fed.Header() + fed.EncodedB64
 
 	//Content-Disposition: attachment; filename=rand.ext
-	rw.Header().Set("Content-Type", "image/"+fed.mime)
-	//rw.Header().Set("Content-Type", "text/html")
+	//rw.Header().Set("Content-Type", "image/"+fed.mime)
+	rw.Header().Set("Content-Type", "text/html")
 	fmt.Fprint(rw, f)
 	return
 }
