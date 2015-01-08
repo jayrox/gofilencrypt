@@ -4,7 +4,13 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
+	b64 "encoding/base64"
 	"fmt"
+	"io/ioutil"
+	"log"
+	m "math/rand"
+	"net/http"
+	"strings"
 )
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -12,12 +18,137 @@ var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ012345
 func randSeq(n int) string {
 	b := make([]rune, n)
 	for i := range b {
-		b[i] = letters[rand.Intn(len(letters))]
+		b[i] = letters[m.Intn(len(letters))]
 	}
 	return string(b)
 }
 
+type FileEncDec struct {
+	Key        []byte
+	nonce      []byte
+	Data       []byte
+	EncodedB64 string
+	Decoded    string
+	mime       string
+	Name       string
+}
+
+func (fed *FileEncDec) Nonce() {
+	b, err := aes.NewCipher(fed.Key)
+	if err != nil {
+		panic(err)
+	}
+
+	gcm, err := cipher.NewGCM(b)
+	if err != nil {
+		panic(err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		panic(err)
+	}
+	fed.nonce = nonce
+}
+
+func (fed *FileEncDec) Dec() {
+	log.Println(fed.Decoded)
+}
+
+func (fed *FileEncDec) DecB64() {
+	// Get image header
+	dec_parts := strings.Split(fed.Decoded, ";base64,")
+	header := dec_parts[0]
+	log.Println("header: ", header)
+
+	// Generate file name
+	ext := "."
+	if strings.Contains(header, "png") {
+		ext += "png"
+	}
+	if strings.Contains(header, "jpg") {
+		ext += "jpg"
+	}
+	if strings.Contains(header, "jpeg") {
+		ext += "jpeg"
+	}
+	if strings.Contains(header, "gif") {
+		ext += "gif"
+	}
+	if strings.Contains(header, "webp") {
+		ext += "webp"
+	}
+	file_name := randSeq(20) + ext
+	log.Println("file name: " + file_name)
+
+	// Decode base64
+	sDec, err := b64.StdEncoding.DecodeString(dec_parts[1])
+	if err != nil {
+		log.Println(err)
+	}
+
+	log.Println("sDec len: ", len(sDec))
+}
+
+func (fed *FileEncDec) EncB64(bytes []byte) {
+	fed.EncodedB64 = b64.URLEncoding.EncodeToString(bytes)
+}
+
+func (fed *FileEncDec) Mime() {
+	if strings.HasSuffix(fed.Name, "png") {
+		fed.mime = "png"
+	}
+	if strings.HasSuffix(fed.Name, "jpg") {
+		fed.mime = "jpg"
+	}
+	if strings.HasSuffix(fed.Name, "jpeg") {
+		fed.mime = "jpeg"
+	}
+	if strings.HasSuffix(fed.Name, "gif") {
+		fed.mime = "gif"
+	}
+	if strings.HasSuffix(fed.Name, "webp") {
+		fed.mime = "webp"
+	}
+}
+
+func (fed *FileEncDec) Header() string {
+	return "data:image/" + fed.mime + ";base64,"
+}
+
 func main() {
+	http.HandleFunc("/", serveImage)
+
+	log.Println("Listening...")
+	http.ListenAndServe(":3001", nil)
+}
+
+func serveImage(rw http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	log.Println(path)
+
+	filepath := "./img" + path
+	log.Println(filepath)
+	file, err := ioutil.ReadFile(filepath)
+	if err != nil {
+		log.Println(err)
+	}
+
+	var fed FileEncDec
+	fed.Name = path
+	fed.EncB64(file)
+	fed.Mime()
+	//log.Println(fed.EncodedB64)
+	//filename := randSeq(10)
+	f := fed.Header() + fed.EncodedB64
+	//Content-Disposition: attachment; filename=rand.ext
+	//rw.Header().Set("Content-Type", "image/"+fed.mime)
+	rw.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(rw, f)
+	return
+}
+
+func o() {
 	rkey := randSeq(32)
 	key := []byte(rkey) // any 128-, 192-, or 256-bit key
 
@@ -45,5 +176,5 @@ func main() {
 		panic(err)
 	}
 
-	fmt.Println(string(v))
+	log.Println(string(v))
 }
