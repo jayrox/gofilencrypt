@@ -30,11 +30,11 @@ type FileEncDec struct {
 	Key  []byte
 	Path string
 	Name string
-	mime string
+	Mime string
 }
 
-func NewFileEncDec(path, name string) *FileEncDec {
-	return &FileEncDec{Path: path, Name: strings.Trim(name, "/")}
+func NewFileEncDec(path, name, key string) *FileEncDec {
+	return &FileEncDec{Path: path, Name: strings.Trim(name, "/"), Key: []byte(key), Mime: Mime(name)}
 }
 
 func (fed *FileEncDec) DecB64(bytes []byte) ([]byte, error) {
@@ -61,29 +61,30 @@ func (fed *FileEncDec) EncB64(bytes []byte) []byte {
 	return encBuf
 }
 
-func (fed *FileEncDec) Mime() {
-	if strings.HasSuffix(fed.Name, "png") {
-		fed.mime = "png"
+func Mime(name string) string {
+	if strings.HasSuffix(name, "png") {
+		return "png"
 	}
-	if strings.HasSuffix(fed.Name, "jpg") {
-		fed.mime = "jpg"
+	if strings.HasSuffix(name, "jpg") {
+		return "jpg"
 	}
-	if strings.HasSuffix(fed.Name, "jpeg") {
-		fed.mime = "jpeg"
+	if strings.HasSuffix(name, "jpeg") {
+		return "jpeg"
 	}
-	if strings.HasSuffix(fed.Name, "gif") {
-		fed.mime = "gif"
+	if strings.HasSuffix(name, "gif") {
+		return "gif"
 	}
-	if strings.HasSuffix(fed.Name, "webp") {
-		fed.mime = "webp"
+	if strings.HasSuffix(name, "webp") {
+		return "webp"
 	}
-	if strings.HasSuffix(fed.Name, "ico") {
-		fed.mime = "ico"
+	if strings.HasSuffix(name, "ico") {
+		return "ico"
 	}
+	return "unknown"
 }
 
 func (fed *FileEncDec) Header() string {
-	return "name:" + fed.Name + ";data:image/" + fed.mime + ";base64,"
+	return "name:" + fed.Name + ";data:image/" + fed.Mime + ";base64,"
 }
 
 func (fed *FileEncDec) LoadDecrypted() ([]byte, error) {
@@ -164,11 +165,7 @@ func serveImageEncrypt(rw http.ResponseWriter, r *http.Request) {
 	log.Println("[Serving] ", path)
 	log.Println("encrypting")
 
-	var fed = NewFileEncDec("./img", path)
-	fed.Mime()
-
-	// Get encryption key
-	fed.Key = []byte("h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
+	var fed = NewFileEncDec("./img", path, "h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
 
 	// Encrypt file
 	b64, err := fed.LoadDecrypted()
@@ -203,10 +200,7 @@ func serveImageDecrypt(rw http.ResponseWriter, r *http.Request) {
 	log.Println("[Serving] ", path)
 	log.Println("decrypting")
 
-	var fed = NewFileEncDec("./img", path)
-	fed.Mime()
-
-	fed.Key = []byte("h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
+	var fed = NewFileEncDec("./img", path, "h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
 
 	// Decrypt file
 	data, err := fed.LoadEncrypted()
@@ -227,7 +221,7 @@ func serveImageDecrypt(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rw.Header().Set("Content-Type", "image/"+fed.mime)
+	rw.Header().Set("Content-Type", "image/"+fed.Mime)
 	rw.Write(decoded)
 	elapsed := time.Since(start)
 	log.Printf("Served in %s", elapsed)
