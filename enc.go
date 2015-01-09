@@ -5,13 +5,15 @@ import (
 	"crypto/cipher"
 	"crypto/rand"
 	b64 "encoding/base64"
+	"errors"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"log"
 	m "math/rand"
 	"net/http"
-	"reflect"
 	"strings"
+	"time"
 )
 
 var letters = []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -31,31 +33,12 @@ type FileEncDec struct {
 	EncodedB64 string
 	Decoded    string
 	mime       string
+	Path       string
 	Name       string
 }
 
-func (fed *FileEncDec) Nonce() {
-	asec, err := aes.NewCipher(fed.Key)
-	if err != nil {
-		panic(err)
-	}
-
-	gcm, err := cipher.NewGCM(asec)
-	if err != nil {
-		panic(err)
-	}
-
-	nonce := make([]byte, gcm.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
-		panic(err)
-	}
-	log.Println("nonce: ", reflect.TypeOf(nonce))
-
-	fed.nonce = nonce
-}
-
-func (fed *FileEncDec) Dec() {
-	log.Println(fed.Decoded)
+func NewFileEncDec(path, name string) *FileEncDec {
+	return &FileEncDec{Path: path, Name: strings.Trim(name, "/")}
 }
 
 func (fed *FileEncDec) DecB64() {
@@ -64,24 +47,7 @@ func (fed *FileEncDec) DecB64() {
 	header := decParts[0]
 	log.Println("header: ", header)
 
-	// Generate file name
-	ext := "."
-	if strings.Contains(header, "png") {
-		ext += "png"
-	}
-	if strings.Contains(header, "jpg") {
-		ext += "jpg"
-	}
-	if strings.Contains(header, "jpeg") {
-		ext += "jpeg"
-	}
-	if strings.Contains(header, "gif") {
-		ext += "gif"
-	}
-	if strings.Contains(header, "webp") {
-		ext += "webp"
-	}
-	file_name := randSeq(20) + ext
+	file_name := randSeq(20) + "." + fed.mime
 	log.Println("file name: " + file_name)
 
 	// Decode base64
@@ -116,110 +82,170 @@ func (fed *FileEncDec) Mime() {
 }
 
 func (fed *FileEncDec) Header() string {
-	return "data:image/" + fed.mime + ";base64,"
+	return "name:" + fed.Name + ";data:image/" + fed.mime + ";base64,"
 }
 
-func (fed *FileEncDec) Load(file_path string) {
-	fed.Name = file_path
-
-	file, err := ioutil.ReadFile(fed.Name)
+func (fed *FileEncDec) LoadDecrypted() {
+	file, err := ioutil.ReadFile(fed.FileName())
 	if err != nil {
 		log.Println(err)
 	}
 
 	fed.EncB64(file)
 	fed.Mime()
-	fed.Nonce()
+	//fed.Nonce()
 }
 
-func (fed *FileEncDec) EncCipher() []byte {
-	asec, err := aes.NewCipher(fed.Key)
+func (fed *FileEncDec) LoadEncrypted() {
+
+	//fed.Nonce()
+
+	// Read file
+	enc_name := fed.FileName() + ".enc"
+	b, err := ioutil.ReadFile(enc_name)
 	if err != nil {
 		panic(err)
 	}
-
-	gcm, err := cipher.NewGCM(asec)
-	if err != nil {
-		panic(err)
-	}
-
-	plaintext := []byte(fed.Header() + fed.EncodedB64)
-	ciphertext := gcm.Seal(nil, fed.nonce, plaintext, nil)
-	return ciphertext
+	fed.Data = b
 }
 
-func (fed *FileEncDec) DecCipher() []byte {
-	asec, err := aes.NewCipher(fed.Key)
-	if err != nil {
-		panic(err)
-	}
-
-	gcm, err := cipher.NewGCM(asec)
-	if err != nil {
-		panic(err)
-	}
-
-	data, err := gcm.Open(nil, fed.nonce, fed.Data, nil)
-	if err != nil {
-		panic(err)
-	}
-	return data
+func (fed *FileEncDec) FileName() string {
+	return fed.Path + "/" + fed.Name
 }
 
-func (fed *FileEncDec) WriteEnc() {
-	f := fed.EncCipher()
+func (fed *FileEncDec) Writer() {
+	//f := fed.EncCipher()
+	f := fed.Data
 
-	// write whole the body
-	enc_name := fed.Name + ".enc"
+	// Write file
+	enc_name := fed.FileName() + ".enc"
+	log.Println(enc_name)
 	err := ioutil.WriteFile(enc_name, f, 0644)
 	if err != nil {
 		panic(err)
 	}
 }
 
-func (fed *FileEncDec) ReadEnc() string {
-	// write whole the body
-	enc_name := fed.Name + ".enc"
-	b, err := ioutil.ReadFile(enc_name)
+func encrypt(key []byte, text string) ([]byte, error) {
+	block, err := aes.NewCipher(key)
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
-	fed.Data = b
+	//b := base64.StdEncoding.EncodeToString(text)
+	ciphertext := make([]byte, aes.BlockSize+len(text)) //b
+	iv := ciphertext[:aes.BlockSize]
+	if _, err := io.ReadFull(rand.Reader, iv); err != nil {
+		return nil, err
+	}
+	cfb := cipher.NewCFBEncrypter(block, iv)
+	cfb.XORKeyStream(ciphertext[aes.BlockSize:], []byte(text)) //b
+	return ciphertext, nil
+}
 
-	return string(fed.DecCipher())
+func decrypt(key, text []byte) ([]byte, error) {
+	log.Println(string(text))
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	if len(text) < aes.BlockSize {
+		return nil, errors.New("ciphertext too short")
+	}
+	iv := text[:aes.BlockSize]
+	text = text[aes.BlockSize:]
+	cfb := cipher.NewCFBDecrypter(block, iv)
+	cfb.XORKeyStream(text, text)
+	log.Println(string(text))
+	data, err := b64.StdEncoding.DecodeString(string(text))
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
 }
 
 func main() {
-	http.HandleFunc("/", serveImage)
+	http.HandleFunc("/e/", serveImageEncrypt)
+	http.HandleFunc("/d/", serveImageDecrypt)
 
 	log.Println("Listening...")
 	http.ListenAndServe(":3001", nil)
 }
 
-func serveImage(rw http.ResponseWriter, r *http.Request) {
-	path := r.URL.Path
-	log.Println(path)
+func serveImageEncrypt(rw http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	log.Println("encrypting")
+	path := strings.Trim(r.URL.Path, "/e")
+	log.Println("[Serving] ", path)
 
-	file_path := "./img" + path
-	log.Println(file_path)
+	var fed = NewFileEncDec("./img", path)
+	log.Println("FileName: ", fed.FileName())
 
-	var fed FileEncDec
-	fed.Key = []byte(randSeq(32))
-	log.Println(fed.Key)
-	fed.Load(file_path)
+	fed.Key = []byte("h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
 
-	//log.Println(fed.EncodedB64)
-	//filename := randSeq(10)
-	f := fed.Header() + fed.EncodedB64
+	// Encrypt file
+	fed.LoadDecrypted()
+	d, err := encrypt(fed.Key, fed.EncodedB64)
+	if err != nil {
+		log.Println(err)
+	}
+	fed.Data = d
+	fed.Writer()
 
-	//Content-Disposition: attachment; filename=rand.ext
 	//rw.Header().Set("Content-Type", "image/"+fed.mime)
 	rw.Header().Set("Content-Type", "text/html")
-	fmt.Fprint(rw, f)
+	fmt.Fprint(rw, d)
+	elapsed := time.Since(start)
+	log.Printf("Served in %s", elapsed)
 	return
 }
 
-func o() {
+func serveImageDecrypt(rw http.ResponseWriter, r *http.Request) {
+	start := time.Now()
+	log.Println("decrypting")
+	path := strings.Trim(r.URL.Path, "/d")
+	log.Println("[Serving] ", path)
+
+	var fed = NewFileEncDec("./img", path)
+	log.Println("FileName: ", fed.FileName())
+
+	fed.Key = []byte("h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
+
+	// Decrypt file
+	fed.LoadEncrypted()
+	d, err := decrypt(fed.Key, fed.Data)
+	if err != nil {
+		log.Println("dec: ", err)
+	}
+
+	//rw.Header().Set("Content-Type", "image/"+fed.mime)
+	rw.Header().Set("Content-Type", "text/html")
+	fmt.Fprint(rw, d)
+	elapsed := time.Since(start)
+	log.Printf("Served in %s", elapsed)
+	return
+}
+
+/*
+
+	// Encrypt files
+
+		fed.Key = []byte(randSeq(32))
+		log.Println("Key: ", string(fed.Key))
+		fed.LoadDecrypted()
+		fed.Writer()
+		f := fed.Header() + fed.EncodedB64
+
+
+	// Decrypt files
+
+		fed.Key = []byte("h9h2fhfUVuS9jZ8uVbhV3vC5AWX39IVU")
+		log.Println("Key: ", string(fed.Key))
+		fed.LoadEncrypted()
+		f := fed.DecCipher()
+		//f := string(fed.Data)
+
+
+func main() {
 	rkey := randSeq(32)
 	key := []byte(rkey) // any 128-, 192-, or 256-bit key
 
@@ -249,3 +275,61 @@ func o() {
 
 	log.Println(string(v))
 }
+
+func (fed *FileEncDec) Nonce() {
+	asec, err := aes.NewCipher(fed.Key)
+	if err != nil {
+		panic(err)
+	}
+
+	gcm, err := cipher.NewGCM(asec)
+	if err != nil {
+		panic(err)
+	}
+
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := rand.Read(nonce); err != nil {
+		panic(err)
+	}
+	log.Println("nonce: ", reflect.TypeOf(nonce))
+
+	fed.nonce = nonce
+}
+
+func (fed *FileEncDec) EncCipher() []byte {
+	asec, err := aes.NewCipher(fed.Key)
+	if err != nil {
+		panic(err)
+	}
+
+	gcm, err := cipher.NewGCM(asec)
+	if err != nil {
+		panic(err)
+	}
+
+	plaintext := []byte(fed.Header() + fed.EncodedB64)
+	ciphertext := gcm.Seal(nil, fed.nonce, plaintext, nil)
+	return ciphertext
+}
+
+func (fed *FileEncDec) DecCipher() []byte {
+	log.Println("Key: ", string(fed.Key))
+	asec, err := aes.NewCipher(fed.Key)
+	if err != nil {
+		log.Println("newciper: ", err)
+	}
+
+	gcm, err := cipher.NewGCM(asec)
+	if err != nil {
+		log.Println("gcm: ", err)
+	}
+
+	log.Println("nonce: ", string(fed.nonce))
+	log.Println(fed.Data)
+	data, err := gcm.Open(nil, fed.nonce, fed.Data, nil)
+	if err != nil {
+		log.Println("open: ", err)
+	}
+	return data
+}
+*/
