@@ -92,8 +92,6 @@ func (fed *FileEncDec) LoadDecrypted() ([]byte, error) {
 		return nil, err
 	}
 
-	fed.Mime()
-
 	return fed.EncB64(file), nil
 }
 
